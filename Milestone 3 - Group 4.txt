@@ -1,0 +1,211 @@
+---------------------------------------------
+Milestone 3 - Database Population/SQL Queries
+---------------------------------------------
+ 
+Group 4: William Hendrickson, Brendan Veit, Justin Waldman and Jorge Fioranelli
+
+
+-------------------------------------------------------------
+Instructions and guest credentials for accessing the database
+-------------------------------------------------------------
+driver=PostgreSQL
+host="traffic.cdq38kterv50.us-east-1.rds.amazonaws.com",
+database="traffic_crashes_v5",
+user="readuser", 
+password="TrafficCrashReadAccess"
+
+
+--------------------------------------
+Query 1: Crash Severity Index per City
+--------------------------------------
+
+This query calculates a severity index for each city, showing fatalities relative to crash volume. Cities with a high index have deadlier crashes on average, even if their overall crash counts are lower. Note: this query takes some time to run, we will add some indexes to improve its performance.
+
+WITH crash_city AS (
+    SELECT DISTINCT
+        c.crash_record_id,
+        p.city_id
+    FROM crash c
+    JOIN person p ON c.crash_record_id = p.crash_record_id
+    WHERE p.city_id IS NOT NULL
+),
+city_stats AS (
+    SELECT
+        ci.name AS city_name,
+        COUNT(*) AS total_crashes,
+        SUM(c.injuries_fatal) AS total_fatalities
+    FROM crash_city cc
+    JOIN crash c ON cc.crash_record_id = c.crash_record_id
+    JOIN city ci ON cc.city_id = ci.id
+    GROUP BY ci.name
+)
+SELECT
+    city_name,
+    total_crashes,
+    total_fatalities,
+    ROUND(
+        CASE WHEN total_crashes > 0
+            THEN total_fatalities::NUMERIC / total_crashes
+            ELSE 0 END,
+        3
+    ) AS severity_index
+FROM city_stats
+ORDER BY severity_index DESC
+LIMIT 10;
+
+------------------------------------------------------------
+Query 2: Top Vehicle Types in Fatal Crashes with Average Age
+------------------------------------------------------------
+
+This query finds the top five vehicle types most frequently involved in fatal crashes and calculates the average age of their drivers. It helps identify whether certain vehicles are linked to fatal incidents and if driver age plays a role. Note: this query takes some time to run, we will add some indexes to improve its performance.
+
+WITH fatal_crashes AS (
+    SELECT DISTINCT crash_record_id
+    FROM crash
+    WHERE injuries_fatal > 0
+)
+SELECT vt.name AS vehicle_type,
+    COUNT(*) AS fatal_crash_count,
+    ROUND(AVG(p.age), 1) AS avg_driver_age
+FROM fatal_crashes fc
+JOIN vehicle v ON fc.crash_record_id = v.crash_record_id
+JOIN vehicle_type vt ON v.vehicle_type_id = vt.id
+JOIN person p ON v.vehicle_id = p.vehicle_id
+JOIN person_type pt ON p.person_type_id = pt.id
+WHERE pt.name = 'DRIVER'
+GROUP BY vt.name
+ORDER BY fatal_crash_count DESC
+LIMIT 5;
+
+
+-------------------------------------------------------------
+Query 3: Driver Age Groups and Safety Equipment Effectiveness
+-------------------------------------------------------------
+
+This query shows how effective different safety equipment types are for drivers across age groups by comparing fatality counts. It helps uncover whether certain age groups benefit less from protective measures.
+
+WITH drivers AS (
+    SELECT p.*, se.name AS safety_equipment, ic.name AS injury_level
+    FROM person p
+    JOIN person_type pt ON p.person_type_id = pt.id
+    JOIN safety_equipment se ON p.safety_equipment_id = se.id
+    JOIN injury_classification ic ON p.injury_classification_id = ic.id
+    WHERE pt.name = 'DRIVER'
+)
+SELECT
+    CASE
+        WHEN age < 25 THEN 'Under 25'
+        WHEN age BETWEEN 25 AND 64 THEN '25-64'
+        ELSE '65+' END AS age_group,
+    safety_equipment,
+    COUNT(*) AS driver_count,
+    SUM(CASE WHEN injury_level = 'FATAL' THEN 1 ELSE 0 END) AS fatalities
+FROM drivers
+GROUP BY age_group, safety_equipment
+ORDER BY age_group, fatalities DESC;
+
+
+---------------------------------------------
+Query 4: Safety Equipment vs. Injury Outcomes
+---------------------------------------------
+
+This query groups drivers by the type of safety equipment (e.g. seat belt, helmet) they were using and counts how many sustained fatal injuries. It joins person to person_type to filter only drivers, and to safety_equipment and injury_classification for equipment and injury status, as well as crash for context. Note: this query takes some time to run, we will add some indexes to improve its performance.
+
+SELECT se.name AS safety_equipment,
+    COUNT(*) AS total_drivers,
+    SUM(CASE WHEN ic.name = 'FATAL' THEN 1 ELSE 0 END) AS fatal_drivers
+FROM person p
+JOIN person_type pt ON p.person_type_id = pt.id
+JOIN crash c ON p.crash_record_id = c.crash_record_id
+JOIN safety_equipment se ON p.safety_equipment_id = se.id
+JOIN injury_classification ic ON p.injury_classification_id = ic.id
+WHERE pt.name = 'DRIVER'
+GROUP BY se.name;
+
+
+------------------------------------
+Query 5: Crashes by Travel Direction
+------------------------------------
+
+Groups vehicles by their travel direction at the time of crash (e.g. N, S). It counts the number of vehicles and sums fatalities for each direction category. 
+
+SELECT td.name AS travel_direction, 
+    COUNT(*) AS vehicle_count, 
+    SUM(c.injuries_fatal) AS total_fatalities
+FROM public.vehicle v
+JOIN public.travel_direction td ON v.travel_direction_id = td.id
+JOIN public.crash c ON v.crash_record_id = c.crash_record_id
+GROUP BY td.name
+ORDER BY vehicle_count DESC;
+
+
+---------------------------------
+Query 6: Crashes per Vehicle Type
+---------------------------------
+
+Measures how often each vehicle type (passenger, van/mini-van, bus, etc.) is involved in fatal crashes. It counts vehicles by type and sums the fatalities in their crashes, computing the fatality rate per vehicle.
+
+SELECT vt.name AS v, 
+    COUNT(*) AS vehicle_count, 
+    SUM(c.injuries_fatal) AS total_fatalities,
+    ROUND(100.0 * SUM(c.injuries_fatal) / COUNT(*), 2) AS fatal_rate_pct
+FROM public.vehicle v
+JOIN public.vehicle_type vt ON v.vehicle_type_id = vt.id
+JOIN public.crash c ON v.crash_record_id = c.crash_record_id
+GROUP BY vt.name
+ORDER BY fatal_rate_pct DESC;
+
+
+--------------------------------
+Query 7: Average Age of Vehicles
+--------------------------------
+
+Computes the average age of vehicles (at the time of crash) grouped by vehicle type. For each unit type (motorcycle, truck, etc.), it subtracts the vehicle’s model year from the crash year and averages the result.
+
+SELECT vt.name AS vehicle_type,
+    ROUND(AVG(EXTRACT(YEAR FROM v.crash_date) - v.vehicle_year), 2) AS avg_vehicle_age
+FROM public.vehicle v
+JOIN public.vehicle_type vt ON v.vehicle_type_id = vt.id
+GROUP BY vt.name
+ORDER BY avg_vehicle_age DESC;
+
+
+-------------------------------------
+Query 8: Total Crashes and Fatalities
+-------------------------------------
+
+Calculates the total crashes and fatalities for each crash type, then computes the percentage of crashes that were fatal. This highlights which types of crashes (e.g. head on, rear end, overturned) are the deadliest.
+
+SELECT ct.name AS crash_type, COUNT(*) AS total_crashes, SUM(c.injuries_fatal) AS total_fatalities,
+    ROUND(100.0 * SUM(c.injuries_fatal) / COUNT(*), 2) AS fatality_rate_pct
+FROM public.crash c
+JOIN public.first_crash_type ct ON c.first_crash_type_id = ct.id
+GROUP BY ct.name
+ORDER BY fatality_rate_pct DESC;
+
+
+----------------------------------------
+Query 9: Top Primary Contributory Causes
+----------------------------------------
+
+Identifies the top primary contributory causes of crashes that resulted in at least one fatality. By filtering on injuries_fatal > 0, it counts how many fatal crashes were attributed to each primary cause (like exceeding authorized speed limit, physical condition of driver, etc).
+
+SELECT pcc.name AS primary_cause, COUNT(*) AS fatal_crashes
+FROM public.crash c
+JOIN public.prim_contributory_cause pcc ON c.prim_contributory_cause_id = pcc.id
+WHERE c.injuries_fatal > 0
+GROUP BY pcc.name
+ORDER BY fatal_crashes DESC;
+
+
+----------------------------
+Query 10: Weather Conditions
+----------------------------
+
+Joins crashes to the weather condition at the time of each crash, counting crashes (and summing fatal injuries) per weather category. This reveals which weather (rain, snow, fog/smoke/haze, etc) produces the most crashes and fatalities. 
+
+SELECT wc.name AS weather_condition, COUNT(*) AS total_crashes, SUM(c.injuries_fatal) AS fatal_crashes
+FROM public.crash c
+JOIN public.weather_condition wc ON c.weather_condition_id = wc.id
+GROUP BY wc.name
+ORDER BY total_crashes DESC;

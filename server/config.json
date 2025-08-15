@@ -1,0 +1,9 @@
+{
+  "rds_host": "traffic.cdq38kterv50.us-east-1.rds.amazonaws.com",
+  "rds_port": "5432",
+  "rds_user": "readuser",
+  "rds_password": "TrafficCrashReadAccess",
+  "rds_db": "traffic_crashes_v5",
+  "server_host": "localhost",
+  "server_port": "8080"
+}
